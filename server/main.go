@@ -23,15 +23,6 @@ var CHARACTERS = []string{
 	"exploding",
 }
 
-type PlayerData struct {
-	ID      string `json:"id"`
-	Player  string `json:"player"`
-	Wins    int    `json:"wins"`
-	Losses  int    `json:"losses"`
-	Total   int    `json:"total"`
-	Created string `json:"created"`
-}
-
 func generateRandomCards() []string {
 	rand.Seed(time.Now().UnixNano())
 	randomDeck := make([]string, 0)
@@ -47,9 +38,15 @@ func generateRandomCards() []string {
 func main() {
 	// Initialize Redis client
 	client = redis.NewClient(&redis.Options{
-		Addr: "localhost:6379", // Redis server address
-		DB:   0,
+		Addr:     "redis-11333.c330.asia-south1-1.gce.cloud.redislabs.com:11333",
+		Password: "K5buAV402UxwpMmEeTmgmw7oDmGqoE0j",
 	})
+	defer func() {
+		if err := client.Close(); err != nil {
+			fmt.Println("Error closing Redis client:", err)
+		}
+	}()
+
 	// Create a new Gin router
 	router := gin.Default()
 
@@ -67,7 +64,7 @@ func main() {
 	// Define a handler for retrieving all stored usernames
 	router.GET("/get-all-usernames", getAllUsernamesHandler)
 
-	//random cards deck
+	// Random cards deck
 	router.GET("/get-random-cards", func(c *gin.Context) {
 		randomCards := generateRandomCards()
 		c.JSON(http.StatusOK, gin.H{"cards": randomCards})
@@ -116,12 +113,11 @@ func storeUsernameHandler(c *gin.Context) {
 		"player":  requestBody.Player,
 		"wins":    0,
 		"losses":  0,
-		"total":   0,
-		"created": time.Now().Format(time.RFC3339),
+		"total":   0,                               // Initialize total to 0
+		"created": time.Now().Format(time.RFC3339), // Store the timestamp in RFC3339 format
 	}).Err()
 
 	if err != nil {
-		fmt.Printf("Error storing player in Redis: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store player in Redis"})
 		return
 	}
@@ -139,7 +135,7 @@ func getAllUsernamesHandler(c *gin.Context) {
 	}
 
 	// Get the details for each username
-	var userStats []PlayerData
+	var userStats []gin.H
 	for _, key := range userKeys {
 		// Check if the key is a hash
 		keyType, err := client.Type(ctx, key).Result()
@@ -159,16 +155,19 @@ func getAllUsernamesHandler(c *gin.Context) {
 			continue
 		}
 
-		// Convert map[string]string to PlayerData struct
-		var userData PlayerData
-		userData.ID = userDetails["id"]
-		userData.Player = userDetails["player"]
-		userData.Wins, _ = strconv.Atoi(userDetails["wins"])
-		userData.Losses, _ = strconv.Atoi(userDetails["losses"])
-		userData.Total = userData.Wins + userData.Losses
-		userData.Created = userDetails["created"]
+		// Convert map[string]string to map[string]interface{}
+		userDetailsInterface := make(map[string]interface{})
+		for k, v := range userDetails {
+			userDetailsInterface[k] = v
+		}
 
-		userStats = append(userStats, userData)
+		// Calculate the total (sum of wins and losses)
+		wins, _ := strconv.Atoi(userDetails["wins"])
+		losses, _ := strconv.Atoi(userDetails["losses"])
+		total := wins + losses
+		userDetailsInterface["total"] = total
+
+		userStats = append(userStats, userDetailsInterface)
 	}
 
 	fmt.Printf("Retrieved PlayerStats: %+v\n", userStats)
