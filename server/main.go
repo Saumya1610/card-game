@@ -64,6 +64,9 @@ func main() {
 	// Define a handler for retrieving all stored usernames
 	router.GET("/get-all-usernames", getAllUsernamesHandler)
 
+	// New endpoint to update player stats and reflect in the leaderboard
+	router.POST("/updatePlayerStats/:id", updatePlayerStatsHandler)
+
 	// Random cards deck
 	router.GET("/get-random-cards", func(c *gin.Context) {
 		randomCards := generateRandomCards()
@@ -173,4 +176,49 @@ func getAllUsernamesHandler(c *gin.Context) {
 	fmt.Printf("Retrieved PlayerStats: %+v\n", userStats)
 
 	c.JSON(http.StatusOK, gin.H{"players": userStats})
+}
+
+// Handler for updating player stats
+func updatePlayerStatsHandler(c *gin.Context) {
+	// Extract player ID from the URL parameter
+	playerID := c.Param("id")
+
+	// Retrieve player stats from the database
+	key := "player:" + playerID
+	playerStats, err := client.HGetAll(ctx, key).Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve player stats from Redis"})
+		return
+	}
+
+	// Retrieve win and loss values from the request body
+	var requestBody struct {
+		Win  int `json:"win"`
+		Loss int `json:"loss"`
+	}
+
+	if err := c.ShouldBindJSON(&requestBody); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update the win and loss fields
+	wins, _ := strconv.Atoi(playerStats["wins"])
+	losses, _ := strconv.Atoi(playerStats["losses"])
+
+	wins += requestBody.Win
+	losses += requestBody.Loss
+
+	// Update the player stats in the database
+	err = client.HMSet(ctx, key, map[string]interface{}{
+		"wins":   wins,
+		"losses": losses,
+	}).Err()
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update player stats in Redis"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Player stats updated successfully"})
 }
