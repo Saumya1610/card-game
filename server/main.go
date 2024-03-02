@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"github.com/rs/cors"
 )
 
@@ -107,17 +108,30 @@ func storeUsernameHandler(c *gin.Context) {
 		return
 	}
 
-	// Generate a unique ID using the current timestamp
-	id := strconv.FormatInt(time.Now().UnixNano(), 10)
+	// Check if the player name already exists
+	exists, err := client.Exists(ctx, "player:byname:"+requestBody.Player).Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check player name existence"})
+		return
+	}
+
+	if exists > 0 {
+		// Player name already exists, return an error
+		c.JSON(http.StatusConflict, gin.H{"error": "Player name already exists"})
+		return
+	}
+
+	// Generate a unique UUID
+	id := uuid.New().String()
 
 	// Store username in Redis hash with associated ID, win counter, loss counter, and timestamp
-	err := client.HMSet(ctx, "player:"+id, map[string]interface{}{
+	err = client.HMSet(ctx, "player:"+id, map[string]interface{}{
 		"id":      id,
 		"player":  requestBody.Player,
 		"wins":    0,
 		"losses":  0,
-		"total":   0,                               // Initialize total to 0
-		"created": time.Now().Format(time.RFC3339), // Store the timestamp in RFC3339 format
+		"total":   0,
+		"created": time.Now().Format(time.RFC3339),
 	}).Err()
 
 	if err != nil {
@@ -125,7 +139,13 @@ func storeUsernameHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "player stored successfully"})
+	// Set a marker for the existence of the player name
+	err = client.Set(ctx, "player:byname:"+requestBody.Player, id, 0).Err()
+	if err != nil {
+		fmt.Println("Warning: Failed to set marker for player name:", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Player stored successfully"})
 }
 
 // Handler for retrieving all stored usernames with stats
@@ -180,21 +200,10 @@ func getAllUsernamesHandler(c *gin.Context) {
 
 // Handler for updating player stats
 func updatePlayerStatsHandler(c *gin.Context) {
-	// Extract player ID from the URL parameter
-	playerID := c.Param("id")
-
-	// Retrieve player stats from the database
-	key := "player:" + playerID
-	playerStats, err := client.HGetAll(ctx, key).Result()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve player stats from Redis"})
-		return
-	}
-
-	// Retrieve win and loss values from the request body
+	// Retrieve player ID and game result from the request body
 	var requestBody struct {
-		Win  int `json:"win"`
-		Loss int `json:"loss"`
+		Win  int `json:"win" binding:"required"`
+		Loss int `json:"loss" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&requestBody); err != nil {
@@ -202,17 +211,28 @@ func updatePlayerStatsHandler(c *gin.Context) {
 		return
 	}
 
-	// Update the win and loss fields
+	// Get the player ID from the URL parameters
+	playerID := c.Param("id")
+
+	// Get the current player stats
+	key := "player:" + playerID
+	playerStats, err := client.HGetAll(ctx, key).Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve player stats from Redis"})
+		return
+	}
+
+	// Update the win and loss fields based on the game result
 	wins, _ := strconv.Atoi(playerStats["wins"])
 	losses, _ := strconv.Atoi(playerStats["losses"])
 
 	wins += requestBody.Win
 	losses += requestBody.Loss
 
-	// Update the player stats in the database
+	// Update the player stats in Redis
 	err = client.HMSet(ctx, key, map[string]interface{}{
-		"wins":   wins,
-		"losses": losses,
+		"wins":   strconv.Itoa(wins),
+		"losses": strconv.Itoa(losses),
 	}).Err()
 
 	if err != nil {
