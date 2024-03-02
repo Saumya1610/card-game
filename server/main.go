@@ -109,15 +109,15 @@ func storeUsernameHandler(c *gin.Context) {
 	}
 
 	// Check if the player name already exists
-	exists, err := client.Exists(ctx, "player:byname:"+requestBody.Player).Result()
-	if err != nil {
+	existingID, err := client.Get(ctx, "player:byname:"+requestBody.Player).Result()
+	if err != nil && err != redis.Nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check player name existence"})
 		return
 	}
 
-	if exists > 0 {
-		// Player name already exists, return an error
-		c.JSON(http.StatusConflict, gin.H{"error": "Player name already exists"})
+	if existingID != "" {
+		// Player name already exists, return the existing ID
+		c.JSON(http.StatusOK, gin.H{"message": "Player name already exists", "id": existingID})
 		return
 	}
 
@@ -145,7 +145,7 @@ func storeUsernameHandler(c *gin.Context) {
 		fmt.Println("Warning: Failed to set marker for player name:", err)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Player stored successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Player stored successfully", "id": id})
 }
 
 // Handler for retrieving all stored usernames with stats
